@@ -302,3 +302,35 @@ def test_config_env_validation_and_password_redaction(tmp_path):
         with pytest.raises(ClientError, match="SLSK_SERVER_PORT"):
             Config.from_env({"SLSK_SERVER_PORT": invalid})
 
+
+
+async def test_listening_port_conflict_is_distinct_from_bad_credentials(configured):
+    from aioslsk.exceptions import ListeningConnectionFailedError
+    service, fake = configured
+
+    async def occupied_port():
+        raise ListeningConnectionFailedError('private dependency detail')
+
+    fake.start = occupied_port
+    with pytest.raises(ClientError, match='Another Soulseek app') as failure:
+        await service.connect()
+    assert 'check credentials' not in str(failure.value)
+    assert 'private dependency detail' not in str(failure.value)
+    assert not service.connected
+    assert fake.stops == 1
+
+
+async def test_rejected_login_does_not_blame_ports_or_expose_server_details(configured):
+    from aioslsk.exceptions import AuthenticationError
+    service, fake = configured
+
+    async def rejected():
+        raise AuthenticationError('INVALIDPASS', 'private dependency detail')
+
+    fake.login = rejected
+    with pytest.raises(ClientError, match='Soulseek rejected this login') as failure:
+        await service.connect()
+    assert 'ports' not in str(failure.value)
+    assert 'private dependency detail' not in str(failure.value)
+    assert not service.connected
+    assert fake.stops == 1

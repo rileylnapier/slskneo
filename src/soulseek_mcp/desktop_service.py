@@ -18,6 +18,9 @@ from aioslsk.settings import Settings, SharedDirectorySettingEntry, WishlistSett
 from aioslsk.shares.manager import SharesManager
 
 from .logging_utils import configure_logging
+from .library_seed import EXTENSIONS, read_music_file
+from .library_uses import clean_uses
+from .listening import ListeningLibrary
 from .service import ClientError, Config, Search, SoulseekService
 
 
@@ -44,6 +47,7 @@ class DesktopService(SoulseekService):
         self.state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.state_dir.chmod(0o700)
         self.state_path = self.state_dir / "desktop.json"
+        self.listening = ListeningLibrary(self.state_dir / "discovery.sqlite3")
         self._state = self._read_state()
         defaults = Config.from_env()
         self.preferences = {
@@ -65,10 +69,15 @@ class DesktopService(SoulseekService):
                     row["state"] = "PAUSED"
                 row["speed_bytes_per_second"] = 0
                 self._archive[row["transfer_id"]] = row
+        # Intended library uses for queued downloads, applied when each file completes.
+        self._download_uses = {k: v for k, v in self._state.get("download_uses", {}).items() if k in self._archive}
+        self._checked_downloads: set[str] = set()
         self._scan_task: asyncio.Task | None = None
         self._scan_error: str | None = None
         self._maintenance_task: asyncio.Task | None = None
         self._search_times: dict[str, float] = {}
+        self._research_searches: dict[str, str] = {}
+        self._research_durations: dict[str, float] = {}
         self._browse_ids: set[str] = set()
         self._saved_serialized = ""
         config = replace(defaults, username=self.preferences["username"],
@@ -108,6 +117,7 @@ class DesktopService(SoulseekService):
         return DesktopClient(settings)
 
     async def start(self):
+        self.listening.start_watches()
         if self._maintenance_task is None:
             self._maintenance_task = asyncio.create_task(self._maintain())
 
@@ -121,10 +131,36 @@ class DesktopService(SoulseekService):
         await self.disconnect()
         self._persist()
 
+        await self.listening.shutdown_watches()
+        await self.listening.shutdown_library_research()
+        self.listening.close()
+
     async def _maintain(self):
         while True:
             await asyncio.sleep(5)
+            await self._import_completed_downloads()
             self._persist()
+
+    async def _import_completed_downloads(self):
+        """Completed audio downloads join the library so agents can find them."""
+        for tid, row in list(self._current_transfers().items()):
+            if row.get("state") != "COMPLETE" or tid in self._checked_downloads:
+                continue
+            self._checked_downloads.add(tid)
+            path = Path(row.get("local_path") or "")
+            uses = self._download_uses.pop(tid, [])
+            if (path.suffix.lower() not in EXTENSIONS or path.is_symlink()
+                    or not path.resolve().is_relative_to(self.config.download_dir.resolve())):
+                continue
+            if self.listening.db.execute("SELECT 1 FROM library_files WHERE path=?", (str(path),)).fetchone():
+                continue
+            try:
+                found = await asyncio.to_thread(read_music_file, path)
+                if found is not None:
+                    self.listening.import_download(found, uses)
+            except Exception:
+                # An unreadable file stays in Downloads; it can be imported with its folder later.
+                continue
 
     def _current_transfers(self):
         rows = OrderedDict(self._archive)
@@ -135,7 +171,7 @@ class DesktopService(SoulseekService):
     def _persist(self):
         state = {"version": 1, "settings": self.preferences, "share_paths": self._share_paths,
                  "share_stats": self._share_stats, "wishlist": self._wishes, "history": self._history,
-                 "transfers": list(self._current_transfers().values())}
+                 "transfers": list(self._current_transfers().values()), "download_uses": self._download_uses}
         encoded = json.dumps(state, ensure_ascii=False, indent=2) + "\n"
         if encoded == self._saved_serialized:
             return
@@ -227,6 +263,8 @@ class DesktopService(SoulseekService):
             await super()._stop()
         finally:
             self._search_times.clear()
+            self._research_searches.clear()
+            self._research_durations.clear()
             self._browse_ids.clear()
             self._persist()
 
@@ -242,7 +280,38 @@ class DesktopService(SoulseekService):
     def _forget_search(self, search):
         super()._forget_search(search)
         self._search_times.pop(search.id, None)
+        self._research_searches.pop(search.id, None)
+        self._research_durations.pop(search.id, None)
         self._browse_ids.discard(search.id)
+
+    def _remove_request(self, search, client=None):
+        if search.id in self._research_searches and search.active:
+            self._research_durations[search.id] = round(max(0, self._clock() - search.created), 1)
+        super()._remove_request(search, client)
+
+    def _on_search_removed(self, event):
+        search = self._searches.get(self._tickets.get(event.query.ticket, ""))
+        if search and search.id in self._research_searches and search.active:
+            self._research_durations.setdefault(search.id, round(max(0, self._clock() - search.created), 1))
+        super()._on_search_removed(event)
+
+    async def research_search(self, track_id):
+        track = self.listening.research_track(track_id)
+        result = await self.search(f"{track['artist']} {track['title']}")
+        self._research_searches[result["search_id"]] = track_id
+        return result
+
+    def research_capture(self, search_id):
+        self._expire_searches()
+        search = self._searches.get(search_id)
+        track_id = self._research_searches.get(search_id)
+        if not search or not track_id:
+            raise ValueError("Start a research search from a collected track first.")
+        if search.active:
+            raise ValueError("Wait for the search to finish, or stop it before recording a sample.")
+        return self.listening.record_soulseek_snapshot(
+            track_id, search_id, search.query, list(search.results.values()),
+            self._search_times[search_id], search.truncated, self._research_durations.get(search_id))
 
     def _on_search_sent(self, event):
         if event.query.search_type != SearchType.WISHLIST:
@@ -292,6 +361,7 @@ class DesktopService(SoulseekService):
         rows.sort(key=keys[sort], reverse=sort in ("size", "speed", "bitrate"))
         total = len(rows)
         return {"search_id": search_id, "query": search.query, "collecting": search.active,
+                "research_track_id": self._research_searches.get(search_id),
                 "total_retained": len(search.results), "total_filtered": total, "truncated": search.truncated,
                 "offset": offset, "next_offset": offset + limit if offset + limit < total else None,
                 "results": rows[offset:offset + limit]}
@@ -312,8 +382,24 @@ class DesktopService(SoulseekService):
             "transfers": list(self._current_transfers().values()), "uploads": uploads,
             "wishlist": self._wishes, "shares": self.shares()["directories"], "history": self._history}
 
-    async def download(self, result_id):
-        return await self._queue_download(result_id)
+    @staticmethod
+    def _uses(uses):
+        try:
+            return clean_uses(uses or [])
+        except ValueError as error:
+            raise ClientError(str(error)) from None
+
+    async def download(self, result_id, uses=None):
+        uses = self._uses(uses)
+        row = await self._queue_download(result_id)
+        self._remember_uses(row["transfer_id"], uses)
+        return {**row, "uses": uses}
+
+    def _remember_uses(self, transfer_id, uses):
+        if uses:
+            self._download_uses[transfer_id] = uses
+            self._checked_downloads.discard(transfer_id)
+        self._persist()
 
     async def _queue_download(self, result_id, directory: Path | None = None):
         async with self._lock:
@@ -439,6 +525,7 @@ class DesktopService(SoulseekService):
             elif transfer_id not in self._archive:
                 raise ClientError("Unknown transfer.")
             self._archive.pop(transfer_id, None)
+            self._download_uses.pop(transfer_id, None)
             self._persist()
         return {"removed": transfer_id, "files_preserved": True}
 
@@ -540,7 +627,8 @@ class DesktopService(SoulseekService):
         search = self._new_browse(username, directories, locked)
         return {**self.results(search.id), "username": username}
 
-    async def download_folder(self, search_id, username, folder):
+    async def download_folder(self, search_id, username, folder, uses=None):
+        uses = self._uses(uses)
         client = self._require_client()
         source = self._searches.get(search_id)
         if source is None or not any(r["username"] == username and str(PureWindowsPath(r["filename"]).parent) == folder
@@ -569,6 +657,7 @@ class DesktopService(SoulseekService):
         for row in rows:
             try:
                 queued.append(await self._queue_download(row["result_id"], directory))
+                self._remember_uses(queued[-1]["transfer_id"], uses)
             except ClientError as error:
                 errors.append({"filename": row["filename"], "message": str(error)})
         if not any(directory.iterdir()):
@@ -622,6 +711,60 @@ class DesktopService(SoulseekService):
         return result
 
     async def dispatch(self, method, params):
+        discovery_methods = {
+            'soundcloud_configure': self.listening.soundcloud_configure,
+            'discovery_soundcloud_status': self.listening.soundcloud_status,
+            'discovery_soundcloud_test': self.listening.soundcloud_client.check,
+            'discovery_soundcloud_profile': self.listening.soundcloud_resolve_profile,
+            'discovery_soundcloud_watch_add': self.listening.soundcloud_watch_add,
+            "discovery_beatport_import_follows": self.listening.beatport_import_follows,
+            'youtube_configure': self.listening.youtube_configure,
+            'discovery_video_state': self.listening.video_state,
+            'discovery_video_search': self.listening.video_search,
+            'discovery_video_save': self.listening.video_save,
+            "discovery_watch_profiles_refresh": self.listening.watch_profiles_refresh,
+            'discovery_representation_explore': self.listening.representation_explore,
+            'discovery_representation_state': self.listening.representation_state,
+            'discovery_representation_mode': self.listening.representation_mode,
+            'discovery_representation_save': self.listening.representation_save,
+            'discovery_representation_source': self.listening.representation_source,
+            "discovery_watch_state": self.listening.watch_state,
+            "discovery_watch_search": self.listening.watch_search,
+            "discovery_watch_add": self.listening.watch_add,
+            "discovery_watch_update": self.listening.watch_update,
+            "discovery_watch_check": self.listening.watch_check,
+            "discovery_inbox": self.listening.inbox,
+            "discovery_library_mark": self.listening.library_mark,
+            "library_queue": self.listening.library_queue,
+            "library_task_claim": self.listening.library_task_claim,
+            "library_task_finish": self.listening.library_task_finish,
+            "discovery_local_audio_file": self.listening.local_audio_file,
+            "discovery_library_research_state": self.listening.library_research_state,
+            "discovery_library_research_start": self.listening.library_research_start,
+            "discovery_library_research_cancel": self.listening.library_research_cancel,
+            "discovery_library_research_review": self.listening.library_research_review,
+            "discovery_import": self.listening.import_batch,
+            "discovery_react": self.listening.react,
+            "discovery_follow": self.listening.follow,
+            "discovery_cue": self.listening.cue,
+            "discovery_beatport": self.listening.beatport,
+            "discovery_resolve": self.listening.resolve,
+            "discovery_seed_folder": self.listening.seed_folder,
+            "discovery_research_record": self.listening.research_record,
+            "discovery_research_review": self.listening.research_review,
+            "discovery_research_search": self.research_search,
+            "discovery_research_capture": self.research_capture,
+        }
+        if isinstance(method, str) and method in discovery_methods:
+            if not isinstance(params, dict):
+                raise ClientError("Invalid discovery parameters.")
+            try:
+                result = discovery_methods[method](**params)
+                return await result if asyncio.iscoroutine(result) else result
+            except (ValueError, TypeError) as error:
+                raise ClientError(str(error)) from None
+            except TimeoutError:
+                raise ClientError("The discovery source timed out. Try again later.") from None
         names = {"status", "snapshot", "settings_get", "configure", "connect", "disconnect", "search", "results",
                  "stop_search", "download", "download_folder", "transfers", "pause_transfer", "resume_transfer",
                  "retry_transfer", "remove_transfer", "shares", "share_add", "share_remove", "shares_rescan", "browse_user",

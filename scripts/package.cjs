@@ -10,6 +10,8 @@ async function main() {
     '-m', 'PyInstaller', '--noconfirm', '--clean', '--onedir', '--name', 'soulseek-backend',
     '--distpath', '.build/python', '--workpath', '.build/pyinstaller', '--specpath', '.build',
     '--paths', 'src', '--collect-all', 'aioslsk', '--collect-data', 'mcp',
+    '--add-data', 'src/soulseek_mcp/beatport_feed.py:soulseek_mcp',
+    '--collect-all', 'mutagen',
     'scripts/backend_entry.py',
   ], { cwd: root, stdio: 'inherit' });
     if (built.status !== 0) throw new Error('Backend packaging failed.');
@@ -24,7 +26,7 @@ async function main() {
   await fs.copyFile(path.join(root, 'THIRD_PARTY_NOTICES.md'), path.join(staging, 'THIRD_PARTY_NOTICES.md'));
   await fs.copyFile(path.join(root, 'LICENSE'), path.join(staging, 'LICENSE'));
   const outputs = await packager({
-    dir: staging, name: 'Soulseek Studio', platform: 'darwin', arch: 'arm64',
+    dir: staging, name: manifest.productName, platform: 'darwin', arch: 'arm64',
     electronVersion: manifest.devDependencies.electron, out: path.join(root, 'release'),
     icon: path.join(root, 'assets/icon.icns'),
     overwrite: true, asar: true, appBundleId: 'local.soulseek.studio',
@@ -35,10 +37,10 @@ async function main() {
   // Packager uses the source basename for extra resources. Normalize it to the
   // stable path expected by the app launcher.
   for (const output of outputs) {
-    const resources = path.join(output, 'Soulseek Studio.app/Contents/Resources');
+    const resources = path.join(output, `${manifest.productName}.app/Contents/Resources`);
     await fs.rm(path.join(resources, 'backend'), { recursive: true, force: true });
     await fs.rename(path.join(resources, 'soulseek-backend'), path.join(resources, 'backend'));
-    console.log(path.join(output, 'Soulseek Studio.app'));
+    console.log(path.join(output, `${manifest.productName}.app`));
   }
 }
 

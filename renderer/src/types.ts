@@ -1,12 +1,19 @@
-export type Tab = 'search' | 'downloads' | 'shares' | 'wishlist' | 'settings';
+export type Tab = 'discover' | 'search' | 'downloads' | 'shares' | 'wishlist' | 'settings';
 export interface SoulseekBridge {
   rpc(method: string, params?: Record<string, unknown>): Promise<any>;
   chooseDirectory(): Promise<string | null>;
   revealFile(path: string): Promise<void>;
+  openRepresentationSource(profileKey:string):Promise<void>;
+  saveYouTube(key:string):Promise<{configured:boolean}>;
+  saveSoundCloud(values:{client_id:string;client_secret:string}):Promise<{configured:boolean}>;
   getCredentials(): Promise<{username: string; hasPassword: boolean}>;
   saveCredentials(credentials: {username: string; password: string}): Promise<void>;
   notify(title: string, body: string): Promise<void>;
   platform: string;
+  openLocalAudio(trackId:string, fileId:string): Promise<void>;
+  openMusicLink(url: string): Promise<void>;
+  importDiscovery(source: string): Promise<{added: number; received: number} | null>;
+  seedDiscovery(): Promise<{added:number;matched_files:number;skipped:number;unreadable:number;truncated:boolean;filename_inferences:number}|null>;
 }
 declare global { interface Window { soulseek?: SoulseekBridge } }
 export interface SearchResult {

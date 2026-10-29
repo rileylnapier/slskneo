@@ -1,9 +1,9 @@
 {
   "name": "slskneo",
-  "productName": "Soulseek Studio",
+  "productName": "Taste",
   "version": "0.1.0",
   "private": true,
-  "description": "A focused Soulseek desktop client with shared MCP control",
+  "description": "Personal music discovery, crate digging, and collecting across sources",
   "license": "GPL-3.0-or-later",
   "main": "electron/main.cjs",
   "scripts": {

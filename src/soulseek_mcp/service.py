@@ -16,6 +16,7 @@ from typing import Any, Callable, Mapping
 from uuid import uuid4
 
 from aioslsk.client import SoulSeekClient
+from aioslsk.exceptions import AuthenticationError, ListeningConnectionFailedError
 from aioslsk.events import (
     SearchRequestRemovedEvent,
     SearchRequestSentEvent,
@@ -154,6 +155,12 @@ class SoulseekService:
                     pass
                 if isinstance(error, asyncio.CancelledError):
                     raise
+                if isinstance(error, ListeningConnectionFailedError):
+                    raise ClientError("Could not open the local listening ports. Another Soulseek app may be using them. "
+                                      "Close that app or choose different ports in Settings → Advanced connection.") from None
+                if isinstance(error, AuthenticationError):
+                    raise ClientError("Soulseek rejected this login. Check your Soulseek username and password "
+                                      "in Settings, then save and connect again.") from None
                 raise ClientError(f"Connection failed ({type(error).__name__}); check credentials, server and listening ports.") from None
             return self.status()
 
