@@ -7,10 +7,12 @@ import {
   Settings2, ShieldCheck, SlidersHorizontal, Trash2, Upload, UserRound, Wifi, X,
 } from 'lucide-react';
 import type { SearchRecord, SearchResult, Settings, Snapshot, Tab, Transfer, Wish } from './types';
+import Discovery, { uses } from './Discovery';
+import { groupSearchFolders } from './search-folders';
 
 const initial: Snapshot = {status: {connected: false, credentials_configured: false}, searches: [], transfers: [], uploads: [], wishlist: [], shares: [], history: []};
-const nav = [{id:'search', title:'Search', icon:Search}, {id:'downloads',title:'Downloads',icon:ArrowDownToLine}, {id:'shares',title:'Shared Files',icon:FolderOpen}, {id:'wishlist',title:'Wishlist',icon:Heart}, {id:'settings',title:'Settings',icon:Settings2}] as const;
-const titles: Record<Tab,string> = {search:'Search',downloads:'Downloads',shares:'Shared Files',wishlist:'Wishlist',settings:'Settings'};
+const nav = [{id:'discover',title:'Discover',icon:Radio}, {id:'search', title:'Search', icon:Search}, {id:'downloads',title:'Downloads',icon:ArrowDownToLine}, {id:'shares',title:'Shared Files',icon:FolderOpen}, {id:'wishlist',title:'Wishlist',icon:Heart}, {id:'settings',title:'Settings',icon:Settings2}] as const;
+const titles: Record<Tab,string> = {discover:'Discover',search:'Search',downloads:'Downloads',shares:'Shared Files',wishlist:'Wishlist',settings:'Settings'};
 function filename(path = '') { return path.split(/[\\/]/).pop() || path; }
 function folder(path = '') { const normalized=path.replaceAll('/', '\\'); return normalized.includes('\\')?normalized.replace(/[\\][^\\]*$/, ''):'.'; }
 function formatBytes(value: number | null | undefined) {
@@ -35,13 +37,14 @@ function Toggle({checked,onChange,label,disabled=false}: {checked:boolean;onChan
   return <button type="button" className={`toggle ${checked ? 'on' : ''}`} role="switch" aria-checked={checked} aria-label={label} disabled={disabled} onClick={onChange}><span /></button>;
 }
 export default function App() {
-  const [tab,setTab] = useState<Tab>('search');
+  const [tab,setTab] = useState<Tab>('discover');
   const [snapshot,setSnapshot] = useState<Snapshot>(initial);
   const [ready,setReady] = useState(false);
   const [backendError,setBackendError] = useState('');
   const [busy,setBusy] = useState<Record<string,boolean>>({});
   const [toast,setToast] = useState<{message:string;type:'success'|'error'}|null>(null);
   const [query,setQuery] = useState('');
+  const [researchIntent,setResearchIntent] = useState<{query:string;trackId:string}|null>(null);
   const [searchId,setSearchId] = useState('');
   const [filter,setFilter] = useState('');
   const [extension,setExtension] = useState('');
@@ -49,10 +52,12 @@ export default function App() {
   const [sort,setSort] = useState('filename');
   const [offset,setOffset] = useState(0);
   const [results,setResults] = useState<SearchResult[]>([]);
+  const [resultView,setResultView] = useState('files');
   const [resultPage,setResultPage] = useState<any>(null);
   const [resultError,setResultError] = useState('');
   const [resultsLoading,setResultsLoading] = useState(false);
   const [selected,setSelected] = useState<Set<string>>(new Set());
+  const [downloadUses,setDownloadUses] = useState<string[]>([]);
   const [downloadFilter,setDownloadFilter] = useState('all');
   const [wishlistQuery,setWishlistQuery] = useState('');
   const [browse,setBrowse] = useState<{username:string;loading:boolean;results:SearchResult[];search_id?:string;error?:string;truncated?:boolean;total_retained?:number;total_filtered?:number;next_offset?:number|null}|null>(null);
@@ -74,7 +79,7 @@ export default function App() {
   const visibleTransfers = snapshot.transfers.filter(t => downloadFilter === 'all' || (downloadFilter === 'complete' ? t.state === 'COMPLETE' : t.state !== 'COMPLETE'));
 
   const rpc = useCallback(async (method:string,params:Record<string,unknown>={}) => {
-    if (!window.soulseek) throw new Error('Open Soulseek Studio from the desktop app to use the local client.');
+    if (!window.soulseek) throw new Error('Open Taste from the desktop app to use the local client.');
     return window.soulseek.rpc(method,params);
   },[]);
   const refresh = useCallback(async () => {
@@ -125,25 +130,25 @@ export default function App() {
     if(!connected&&!snapshot.status.credentials_configured){setTab('settings');setToast({message:'Add your Soulseek account to connect.',type:'success'});return;}
     await run('connection',()=>rpc(connected?'disconnect':'connect'),connected?'Disconnected. Your saved queue is kept.':'You’re connected to Soulseek.');
   }
-  async function startSearch(event?:FormEvent,term=query){
+  async function startSearch(event?:FormEvent,term=query,trackId:string|null=researchIntent?.query===term?researchIntent.trackId:null){
     event?.preventDefault();if(!term.trim())return;
     if(!connected){setToast({message:'Connect your Soulseek account before searching.',type:'error'});return;}
-    const result=await run('search',()=>rpc('search',{query:term.trim()}));
-    if(result){setSearchId(result.search_id);setQuery(term.trim());setTab('search');setSelected(new Set());setFilter('');setExtension('');setOffset(0);}
+    const result=await run('search',()=>trackId?rpc('discovery_research_search',{track_id:trackId}):rpc('search',{query:term.trim()}));
+    if(result){setResearchIntent(null);setSearchId(result.search_id);setQuery(result.query||term.trim());setTab('search');setSelected(new Set());setFilter('');setExtension('');setOffset(0);}
   }
-  function chooseSearch(search:SearchRecord){setSearchId(search.search_id);setQuery(search.query);setSelected(new Set());setOffset(0);setTab('search');}
+  function chooseSearch(search:SearchRecord){setResearchIntent(null);setSearchId(search.search_id);setQuery(search.query);setSelected(new Set());setOffset(0);setTab('search');}
   async function downloadResults(ids:string[]){
     if(!ids.length)return;
     await run('download',async()=>{
       const failed:string[]=[];let count=0;let firstError='';
-      for(const id of ids){try{await rpc('download',{result_id:id});count++;}catch(error:any){failed.push(id);firstError ||= error.message;}}
+      for(const id of ids){try{await rpc('download',{result_id:id,uses:downloadUses});count++;}catch(error:any){failed.push(id);firstError ||= error.message;}}
       setSelected(new Set(failed));
       setToast({message:failed.length?`${count} queued, ${failed.length} not added. ${firstError}`:`${count} ${count===1?'file':'files'} added to downloads.`,type:failed.length?'error':'success'});
       return count;
     });
   }
   async function downloadFolder(row:SearchResult,id=searchId){
-    await run('folder',async()=>{const value=await rpc('download_folder',{search_id:id,username:row.username,folder:folder(row.filename)});const failures=value.errors?.length||0;setToast({message:failures?`${value.queued_count} files queued; ${failures} could not be added.`:`${value.queued_count} folder files added to downloads.`,type:failures?'error':'success'});return value;});
+    await run('folder',async()=>{const value=await rpc('download_folder',{search_id:id,username:row.username,folder:folder(row.filename),uses:downloadUses});const failures=value.errors?.length||0;setToast({message:failures?`${value.queued_count} files queued; ${failures} could not be added.`:`${value.queued_count} folder files added to downloads.`,type:failures?'error':'success'});return value;});
   }
   async function browseUser(username:string){
     setBrowse({username,loading:true,results:[]});setBrowseFilter('');setBrowseOffset(0);
@@ -183,18 +188,20 @@ export default function App() {
 
   return <div className="app-shell">
     <div className="workspace">
-      <header className="titlebar"><button className="app-wordmark" onClick={()=>setTab('search')} aria-label="Soulseek Studio home"><span className="catalogue-mark"><i/><i/><i/></span>soulseek<span>STUDIO</span></button><div className="titlebar-middle">{titles[tab]}</div><div className="titlebar-actions"><button className="keyboard-shortcut" onClick={()=>{setTab('search');setTimeout(()=>searchInput.current?.focus(),20);}} aria-label="Focus search"><Search size={13}/><kbd>⌘ K</kbd></button><button className={`connection-button ${connected?'connected':''}`} onClick={()=>void toggleConnection()} disabled={busy.connection||!ready}>{busy.connection?<Loader2 size={12} className="spin"/>:<span className={`connection-dot ${connected?'online':''}`}/>}<span>{busy.connection?(connected?'Disconnecting…':'Connecting…'):connected?'Connected':'Connect account'}</span><Power size={12}/></button></div></header>
+      <header className="titlebar"><button className="app-wordmark" onClick={()=>setTab('discover')} aria-label="Taste home"><span className="taste-wordmark">taste<span className="taste-period">.</span></span></button><div className="titlebar-middle">{titles[tab]}</div><div className="titlebar-actions"><button className="keyboard-shortcut" onClick={()=>{setTab('search');setTimeout(()=>searchInput.current?.focus(),20);}} aria-label="Focus search"><Search size={13}/><kbd>⌘ K</kbd></button><button className={`connection-button ${connected?'connected':''}`} onClick={()=>void toggleConnection()} disabled={busy.connection||!ready}>{busy.connection?<Loader2 size={12} className="spin"/>:<span className={`connection-dot ${connected?'online':''}`}/>}<span>{busy.connection?(connected?'Disconnecting…':'Connecting…'):connected?'Connected':'Connect account'}</span><Power size={12}/></button></div></header>
       <nav className="main-navigation" aria-label="Main navigation">{nav.map(item=><button key={item.id} className={`nav-item ${tab===item.id?'active':''}`} onClick={()=>setTab(item.id)}><item.icon size={15} strokeWidth={1.7}/><span>{item.title}</span>{item.id==='downloads'&&activeDownloads.length>0&&<span className="nav-count">{activeDownloads.length}</span>}{item.id==='wishlist'&&snapshot.wishlist.length>0&&<span className="nav-count">{snapshot.wishlist.length}</span>}</button>)}<span className="navigation-account">{connected?(snapshot.status.username||settings?.username||'Online'):'Offline'}<span className={`connection-dot ${connected?'online':''}`}/></span></nav>
       {backendError&&<div className="backend-error"><Info size={15}/><span>{backendError}</span><button onClick={()=>void refresh()}>Retry</button></div>}
       <main className={`main-content ${tab==='search'?'search-page':''}`}>
+      {tab==='discover'&&ready&&<Discovery rpc={rpc} onSearch={(term,trackId)=>{setResearchIntent(trackId?{query:term,trackId}:null);setQuery(term);setTab('search');if(connected)void startSearch(undefined,term,trackId||null);else {setSearchId('');setToast({message:'Connect Soulseek to search. Your query is ready.',type:'success'});}}}/>}
       {tab==='search'&&<>
         <div className="page-heading"><div><h1>Search</h1><p>Find files across the Soulseek network.</p></div><span className="page-reference">GLOBAL SEARCH</span></div>
-        <form className="search-bar" onSubmit={event=>void startSearch(event)}><Search size={21}/><input ref={searchInput} aria-label="Search the Soulseek network" value={query} onChange={event=>setQuery(event.target.value)} placeholder="Artist, album, track, or filename" maxLength={256}/>{query&&iconButton(<X size={15}/>,'Clear search',()=>{setQuery('');searchInput.current?.focus();})}<button className="primary search-submit" disabled={!query.trim()||busy.search||!connected}>{busy.search?<Loader2 className="spin" size={16}/>:<ArrowRight size={17}/>}<span>Search</span></button></form>
+        <form className="search-bar" onSubmit={event=>void startSearch(event)}><Search size={21}/><input ref={searchInput} aria-label="Search the Soulseek network" value={query} onChange={event=>{setQuery(event.target.value);setResearchIntent(null);}} placeholder="Artist, album, track, or filename" maxLength={256}/>{query&&iconButton(<X size={15}/>,'Clear search',()=>{setQuery('');setResearchIntent(null);searchInput.current?.focus();})}<button className="primary search-submit" disabled={!query.trim()||busy.search||!connected}>{busy.search?<Loader2 className="spin" size={16}/>:<ArrowRight size={17}/>}<span>Search</span></button></form>
         {searchId?<>
           <div className="search-tabs">{[...snapshot.searches].map(item=><button key={item.search_id} className={item.search_id===searchId?'active':''} onClick={()=>chooseSearch(item)}>{item.collecting?<span className="tiny-dot pulse"/>:<Search size={12}/>}<span>{item.query}</span><small>{item.total_retained}</small></button>)}</div>
           <section className="results-card"><div className="results-toolbar"><div className="result-heading"><h2>{resultPage?.query||query}</h2><Badge>{resultPage?.total_retained??searchRecord?.total_retained??0} results</Badge>{(resultPage?.collecting||searchRecord?.collecting)&&<span className="collecting"><span className="tiny-dot pulse"/>Searching</span>}</div><div className="toolbar-right">{(resultPage?.collecting||searchRecord?.collecting)&&<button className="text-button" onClick={()=>void run('stop',()=>rpc('stop_search',{search_id:searchId}))} disabled={busy.stop}>Stop search</button>}<button className="secondary compact" onClick={()=>void addWish(resultPage?.query||query)} disabled={busy['wish-add']}><Heart size={14}/>Save to wishlist</button></div></div>
-          <div className="filters"><div className="filter-input"><ListFilter size={14}/><input aria-label="Filter search results" placeholder="Filter these results…" value={filter} onChange={e=>setFilter(e.target.value)}/></div><select aria-label="File format filter" value={extension} onChange={e=>setExtension(e.target.value)}><option value="">All formats</option><option value="flac">FLAC</option><option value="mp3">MP3</option><option value="wav">WAV</option><option value="aiff">AIFF</option><option value="m4a">M4A</option><option value="ogg">OGG</option></select><select aria-label="Minimum bitrate" value={minBitrate} onChange={e=>setMinBitrate(Number(e.target.value))}><option value="0">Any bitrate</option><option value="192">192 kbps +</option><option value="256">256 kbps +</option><option value="320">320 kbps +</option></select><select aria-label="Sort results" value={sort} onChange={e=>setSort(e.target.value)}><option value="filename">File name</option><option value="size">File size</option><option value="username">Peer</option><option value="speed">Peer speed</option></select>{selected.size>0&&<button className="primary compact selection-download" onClick={()=>void downloadResults([...selected])} disabled={busy.download||!connected}>{busy.download?<Loader2 className="spin" size={14}/>:<Download size={14}/>}Download {selected.size}</button>}</div>
-          {resultError?<Empty icon={<Info size={25}/>} title="These results are no longer available" description={resultError} action={<button className="secondary" onClick={()=>void startSearch(undefined,query)} disabled={!connected||busy.search}><RefreshCw size={14}/>Search again</button>}/>:results.length?fileTable(results):<Empty icon={resultsLoading||resultPage?.collecting?<Radio size={26}/>:<Search size={26}/>} title={resultsLoading||resultPage?.collecting?'Listening for results…':'No matching files yet'} description={filter||extension||minBitrate?'Try widening your filters or searching another phrase.':'Peers reply at different speeds. Save this search to your wishlist to check again later.'}/>}
+          {resultPage?.research_track_id&&<div className="research-search-banner"><div><strong>Researching a collected track version</strong><p>Record all retained results as an availability sample after this search finishes. Filters below don’t change the sample. Filename matches are unverified.</p></div><button className="secondary" disabled={busy['research-capture']||resultPage.collecting} onClick={()=>void run('research-capture',()=>rpc('discovery_research_capture',{search_id:searchId}),'Availability sample saved in the track’s research history.')}>Record availability sample</button></div>}
+          <div className="filters"><select aria-label="Search results view" value={resultView} onChange={e=>setResultView(e.target.value)}><option value="files">Files</option><option value="folders">Folders</option></select><div className="filter-input"><ListFilter size={14}/><input aria-label="Filter search results" placeholder="Filter these results…" value={filter} onChange={e=>setFilter(e.target.value)}/></div><select aria-label="File format filter" value={extension} onChange={e=>setExtension(e.target.value)}><option value="">All formats</option><option value="flac">FLAC</option><option value="mp3">MP3</option><option value="wav">WAV</option><option value="aiff">AIFF</option><option value="m4a">M4A</option><option value="ogg">OGG</option></select><select aria-label="Minimum bitrate" value={minBitrate} onChange={e=>setMinBitrate(Number(e.target.value))}><option value="0">Any bitrate</option><option value="192">192 kbps +</option><option value="256">256 kbps +</option><option value="320">320 kbps +</option></select><select aria-label="Sort results" value={sort} onChange={e=>setSort(e.target.value)}><option value="filename">File name</option><option value="size">File size</option><option value="username">Peer</option><option value="speed">Peer speed</option></select><div className="download-uses" role="group" aria-label="Mark downloads for"><span>For</span>{uses.map(([id,label])=><button key={id} type="button" className={downloadUses.includes(id)?'active':''} aria-pressed={downloadUses.includes(id)} onClick={()=>setDownloadUses(current=>current.includes(id)?current.filter(u=>u!==id):[...current,id])}>{label}</button>)}</div>{selected.size>0&&<button className="primary compact selection-download" onClick={()=>void downloadResults([...selected])} disabled={busy.download||!connected}>{busy.download?<Loader2 className="spin" size={14}/>:<Download size={14}/>}Download {selected.size}</button>}</div>
+          {resultError?<Empty icon={<Info size={25}/>} title="These results are no longer available" description={resultError} action={<button className="secondary" onClick={()=>void startSearch(undefined,query)} disabled={!connected||busy.search}><RefreshCw size={14}/>Search again</button>}/>:results.length?(resultView==='folders'?<div className="search-folder-list"><p>Folders in this results page · matching files may be only part of an album.</p>{groupSearchFolders(results).map(group=><details key={group.key} className="search-folder"><summary><Folder size={18}/><span><strong>{filename(group.path)}</strong><small>{group.username} · {group.rows.length} matching files · {group.path}</small></span></summary><div className="search-folder-actions"><button className="secondary" onClick={()=>void browseUser(group.username)}>Browse peer’s collection</button><button className="secondary" disabled={group.rows.every(r=>r.locked)||busy.folder||!connected} onClick={()=>void downloadFolder(group.rows.find(r=>!r.locked)!,searchId)}>Download entire folder</button></div>{fileTable(group.rows)}</details>)}</div>:fileTable(results)):<Empty icon={resultsLoading||resultPage?.collecting?<Radio size={26}/>:<Search size={26}/>} title={resultsLoading||resultPage?.collecting?'Listening for results…':'No matching files yet'} description={filter||extension||minBitrate?'Try widening your filters or searching another phrase.':'Peers reply at different speeds. Save this search to your wishlist to check again later.'}/>}
           <div className="table-footer"><span>{resultPage?.truncated?'Result limit reached · narrow your query':selected.size?`${selected.size} selected`:'Choose a file to start a download'}</span><div>{resultPage?.total_retained>0&&<span>{offset+1}–{offset+results.length}</span>}{iconButton(<ChevronLeft size={15}/>,'Previous page',()=>setOffset(Math.max(0,offset-100)),offset===0)}{iconButton(<ChevronRight size={15}/>,'Next page',()=>setOffset(resultPage.next_offset),resultPage?.next_offset==null)}</div></div></section>
         </>:<>
           {snapshot.history.length>0&&<section className="history-strip"><span>History</span>{snapshot.history.slice(0,6).map((item:any,index:number)=><button key={`${item.query||item}-${index}`} onClick={()=>void startSearch(undefined,typeof item==='string'?item:item.query)} disabled={!connected}>{typeof item==='string'?item:item.query}</button>)}</section>}

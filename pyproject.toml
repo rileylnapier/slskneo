@@ -7,7 +7,7 @@ name = "soulseek-mcp"
 version = "0.1.0"
 description = "A local Soulseek MCP client built on aioslsk"
 requires-python = ">=3.11,<3.15"
-dependencies = ["aioslsk==1.6.4", "mcp==1.30.0", "python-dotenv>=1.2,<2"]
+dependencies = ["aioslsk==1.6.4", "mcp==1.30.0", "python-dotenv>=1.2,<2", "mutagen>=1.47,<2"]
 
 [project.optional-dependencies]
 test = ["pytest>=8,<10", "pytest-asyncio>=1,<2"]

@@ -1,0 +1,33 @@
+.library-research {padding:24px 0;}
+.research-intro,.research-launch,.research-progress>div,.research-seed-tools,.research-review-actions {display:flex;align-items:center;gap:14px;}
+.research-intro {justify-content:space-between;}
+.research-intro h2 {font-size:29px;margin:8px 0;}
+.library-research p {font-size:13px;line-height:1.6;}
+.research-intro>svg {color:#b8323b;margin-right:20px;}
+.research-launch {padding:18px 20px;margin:16px 0;background:#f8df83;border:1px solid #c6ac64;border-radius:12px;}
+.research-launch>div {flex:1;}.research-launch p {margin:5px 0 0;}
+.research-seeds {padding:16px;border:1px solid #d9cdb8;border-radius:10px;background:#fffaf1;}
+.research-seed-tools input {flex:1;}.research-seed-list {max-height:280px;overflow:auto;margin-top:12px;}
+.research-seed-list label {display:flex;align-items:center;gap:12px;padding:9px;border-bottom:1px solid #e8dfce;cursor:pointer;}
+.research-seed-list input[type=checkbox] {width:16px;height:16px;accent-color:#b8323b;}
+.research-seed-list strong,.research-seed-list small {display:block;font-size:12px;}.research-seed-list small {margin-top:3px;color:#756c60;}
+.research-progress {padding:16px 20px;background:#e6edcf;border:1px solid #bfcba5;border-radius:12px;margin:16px 0;}
+.research-progress>div>strong {flex:1;}.research-progress span,.research-progress summary {font-size:12px;}
+.research-progress progress {width:100%;height:8px;accent-color:#53663f;margin:14px 0 0;}
+.research-progress details {max-height:220px;overflow:auto;}.research-progress summary {cursor:pointer;}
+.research-results-heading {margin:26px 0 10px;}.research-results-heading h3 {font-size:21px;margin:0;}.research-results-heading p {margin:6px 0;}
+.research-review-tabs {display:flex;gap:8px;margin:16px 0;}.research-review-tabs button {padding:8px 14px;border:1px solid #d8cbb5;border-radius:20px;background:#fffaf1;}.research-review-tabs .chosen {background:#322c26;color:#fffaf1;}.research-review-tabs span {margin-left:6px;opacity:.7;}
+.research-findings-layout {display:grid;grid-template-columns:minmax(260px,.9fr) minmax(360px,1.1fr);gap:20px;align-items:start;}
+.research-findings-list {max-height:840px;overflow:auto;display:grid;gap:8px;padding:2px;}
+.research-findings-list>button {display:flex;align-items:center;text-align:left;gap:12px;padding:14px 12px;border:1px solid #d8cbb5;border-radius:10px;background:#fffaf1;min-width:0;}
+.research-findings-list>button.selected {background:#f8e6ae;border-color:#ac914d;}.research-findings-list strong {display:block;font-size:13px;line-height:1.45;}.research-findings-list small {display:block;font-size:11px;line-height:1.5;margin-top:3px;color:#766958;}
+.research-findings-list .track-art {flex-shrink:0;width:46px;height:46px;}
+.research-finding-detail {padding:24px;border:1px solid #d8cbb5;border-radius:14px;background:#fffaf1;box-shadow:3px 4px 0 #e5dac5;}
+.research-finding-detail h2 {font-size:25px;line-height:1.25;margin:14px 0 8px;}.research-finding-detail audio {width:100%;}
+.research-review-actions {flex-wrap:wrap;margin:18px 0;}.research-review-actions>span {display:flex;align-items:center;gap:6px;color:#52663f;font-size:13px;}
+.research-evidence {margin:12px 0;}.research-evidence strong {font-size:12px;}.research-evidence p {margin:5px 0;}.research-evidence small {font-size:10px;color:#84776a;}
+.research-empty {padding:38px;text-align:center;background:#f2eadb;border:1px dashed #c9b99e;border-radius:12px;color:#776a57;}
+@media(max-width:1050px){.research-launch{flex-wrap:wrap;}.research-launch>div{flex-basis:100%;}.research-findings-layout{grid-template-columns:minmax(240px,.85fr) minmax(300px,1.15fr);}.research-finding-detail{padding:16px;}}
+
+.research-find-filter {width:100%;box-sizing:border-box;margin:0 0 18px;}
+.soundcloud-review {margin:20px 0;padding:18px;background:#f2ead6;border-radius:12px;}.soundcloud-review p {font-size:12px;line-height:1.6;margin-bottom:12px;}.soundcloud-review>label {display:block;font-size:12px;margin:12px 0;}.soundcloud-review>label input:not([type=checkbox]),.soundcloud-review select {display:block;width:100%;margin-top:6px;}.soundcloud-review>.profile-confirm {display:flex;}
